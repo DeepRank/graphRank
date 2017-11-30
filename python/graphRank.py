@@ -81,15 +81,13 @@ class graphRank(object):
 		t0 = time()
 		self.px /= np.sum(self.px)
 		
-		#for p in self.px:
-		#	print(p)
 
 		K.append(np.dot(self.px*self.W0,self.px))
 		pW = self.Wx.transpose().dot(self.px)
-
+		
 		for i in range(1,walk+1):
-			K.append(   K[i-1]* lamb**i * np.dot(pW,self.px) )
-			pW = self.Wx.transpose().dot(self.px)
+			K.append(   K[i-1] + lamb**i * np.dot(pW,self.px) )
+			pW = self.Wx.transpose().dot(pW)
 		print('K          : %f' %(time()-t0))
 		return K
 
@@ -115,59 +113,32 @@ class graphRank(object):
 		# double the pssm edges for g1
 		pssm1 = np.vstack((g1.edges_pssm,np.hstack((g1.edges_pssm[:,20:],g1.edges_pssm[:,:20]))))
 		pssm2 = g2.edges_pssm
-		#print(pssm2)
-
 
 		# compute the weight 
 		weight  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[pssm1,pssm2]) ])
 		ind     = np.array([ self._get_index(k[0],k[1],g2.num_nodes)  for k in itertools.product(*[index1,index2])])
 		index = ( ind[:,0].tolist(),ind[:,1].tolist() )
-		#print(np.sum(weight))
-		#print(weight)
-		#for w,(i,j) in zip(weight,ind):
-		# 	print(i,j)
-
-		
-		for k in itertools.product(*[index1,index2]):
-			aa = self._get_index(k[0],k[1],g2.num_nodes) 
-			print(k[0],k[1],aa)
-			
-		print(g2.num_nodes)
+				
+		# final size	
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
-		print(n_nodes_prod)
-		print(ind)
 
 		self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
-		print(self.Wx)
-		print('CPU - Kron : %f (%f)' %(time()-t0,self.Wx.sum()))
+
+		print('CPU - Kron : %f' %(time()-t0))
 
 	# px vector calculation with nodes info
 	def compute_px(self,g1,g2,cutoff=0.5):
 
 		t0 = time()
 		n1,n2 = g1.num_nodes,g2.num_nodes
-		N = n1*n2
-		self.px = np.zeros(N)
-
-		for i in range(n1):
-			if g1.nodes_info_data[i]>cutoff:
-				for j in range(n2):
-					if g2.nodes_info_data[j] > cutoff:
-						self.px[i*n2+j] = g1.nodes_info_data[i]*g2.nodes_info_data[j]
-		
+		self.px = [t[0]*t[1] if (float(t[0])>cutoff or float(t[1])>cutoff) else 0 for t in itertools.product(*[g1.nodes_info_data,g2.nodes_info_data])]
 		print('CPU - Px   : %f' %(time()-t0))
 
 	# W0 alculation : nodes pssm similarity
 	def compute_W0(self,g1,g2):
 		t0 = time()
-		n1,n2 = g1.num_nodes,g2.num_nodes
-		N = n1*n2
-		self.W0 = np.zeros(N)
-
-		for i in range(n1):
-			for j in range(n2):
-				self.W0[i*n2+j] = self._rbf_kernel(g1.nodes_pssm_data[i],g2.nodes_pssm_data[j])
+		self.W0  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[g1.nodes_pssm_data,g2.nodes_pssm_data]) ])
 		print('CPU - W0   : %f' %(time()-t0))
 
 
@@ -194,7 +165,7 @@ class graphRank(object):
 
 	@staticmethod
 	def _get_index(index1,index2,size2):
-		index = np.array(index1) * size2 + np.array(index2)
+		index = np.array(index1.tolist()) * size2 + np.array(index2.tolist())
 		return index.tolist()
 
 
