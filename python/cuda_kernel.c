@@ -1,16 +1,31 @@
 #include <math.h>
 
-// the sim function
-__host__ __device__ float rbf_kernel(float a, float b)
+// the rbf kernel function
+__host__ __device__ float rbf_kernel(int tx, int ty, float *a, float *b, int len, int invert)
 {
-	float sim;
-	float d;
 	float sigma = 10.;
 	float beta = 0.5/sigma/sigma;
+	float d = 0;
+	float k = 0;
 
-	d = a-b; 
-	sim = exp(-beta*(d*d));
-	return sim;
+	if(invert == 0)
+	{
+		for(int i=0;i<len;i++)
+			d += (a[tx*len+i]-b[ty*len+i])*(a[tx*len+i]-b[ty*len+i]);
+	}
+
+	else if (invert == 1)
+	{
+		int half = len/2;
+		for(int i=0;i<half;i++){
+			d += (a[tx*len+i+half]-b[ty*len+i])*(a[tx*len+i+half]-b[ty*len+i]);
+			d += (a[tx*len+i]-b[ty*len+i+half])*(a[tx*len+i]-b[ty*len+i+half]);
+		}
+	}
+
+	k = exp(-beta*d);
+	return k;
+
 }
 
 __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2, 
@@ -22,38 +37,45 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 
 	int tx = threadIdx.x + blockDim.x * blockIdx.x;
 	int ty = threadIdx.y + blockDim.y * blockIdx.y;
-	int ind,len = 40;
-	int half_len = len/2;
+	int ind=0,len = 40;
+	float w;
+	int invert;
 
 	if ( (tx < n_edges_1) && (ty < n_edges_2) ){ 
 
+		////////////////////////////////////
 		// first pass
 		// i-j VS a-b
+		////////////////////////////////////
 
+		// get the index of the element
 		ind = tx * n_edges_2 + ty;
 
-		float sim = 0;
-		for(int i=0;i<len;i++){
-			sim += rbf_kernel(edges_pssm_1[tx*len + i],edges_pssm_2[ty*len + i]);
-		}			
+		// get its weight
+		invert=0;
+		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);		
 
-		edges_weight_product[ind]       = sim;
-		edges_index_product[2*ind]      = edges_index_1[2*tx]   * n_nodes_2   + edges_index_2[2*ty];
-		edges_index_product[2*ind + 1]  = edges_index_1[2*tx+1] * n_nodes_2   + edges_index_2[2*ty+1];
+		// store it
+		edges_weight_product[ind]       = w;
+		edges_index_product[2*ind]      = edges_index_1[tx]   * n_nodes_2   + edges_index_2[ty] ;
+		edges_index_product[2*ind + 1]  = edges_index_1[n_edges_1 + tx] * n_nodes_2   + edges_index_2[n_edges_2+ ty] ;
 
+		////////////////////////////////////
 		// second pass
 		// j-i VS a-b
-		ind = ind + n_edges_1 * n_edges_2
+		////////////////////////////////////
 
-		float sim = 0;
-		for(int i=0;i<half_len;i++){
-			sim += rbf_kernel(edges_pssm_1[tx*len + half_len + i],edges_pssm_2[ty*len + i]);
-			sim += rbf_kernel(edges_pssm_1[tx*len + i],edges_pssm_2[ty*len + half_len + i]);
-		}			
+		// get the index element
+		ind = ind + n_edges_1 * n_edges_2;
 
-		edges_weight_product[ind]       = sim;
-		edges_index_product[2*ind]      = edges_index_1[2*tx+1]   * n_nodes_2   + edges_index_2[2*ty];
-		edges_index_product[2*ind + 1]  = edges_index_1[2*tx] * n_nodes_2   + edges_index_2[2*ty+1];
+		// get the weight
+		invert=1;
+		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);	
+
+		// store it
+		edges_weight_product[ind]       = w;
+		edges_index_product[2*ind]      = edges_index_1[n_edges_1 + tx]   * n_nodes_2   + edges_index_2[ty];
+		edges_index_product[2*ind + 1]  = edges_index_1[tx]     * n_nodes_2   + edges_index_2[n_edges_2 + ty];
 
 	}
 }
@@ -71,11 +93,10 @@ __global__ void create_nodesim_mat(float *nodes_pssm_1, float *nodes_pssm_2, flo
 
 		len = 20;
 		ind = tx * n_nodes_2 + ty;
+		int invert = 0;
+		float sim;
 
-		float sim = 0;
-		for (int i=0;i<len;i++){
-			sim += rbf_kernel(nodes_pssm_1[ tx*len + i ],nodes_pssm_2[ty*len + i]);
-		}
+		sim = rbf_kernel(tx,ty,nodes_pssm_1,nodes_pssm_2,len,invert);
 		W0[ind] = sim;
 	}
 }

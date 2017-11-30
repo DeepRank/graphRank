@@ -121,7 +121,7 @@ class graphRank(object):
 		# create the Wx matrix
 		self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
-
+		print(np.sum(self.Wx))
 		print('CPU - Kron : %f' %(time()-t0))
 
 	# px vector calculation with nodes info
@@ -201,7 +201,8 @@ class graphRank(object):
 		dim = (n1,n2,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
-		create_kron_mat_gpu (ind1,ind2,pssm1,pssm2,
+		create_kron_mat_gpu (ind1,ind2,
+							 pssm1,pssm2,
 			                 index_product,weight_product,
 			                 n1,n2,g2.num_nodes,
 							 block=block,grid=grid)
@@ -209,8 +210,11 @@ class graphRank(object):
 		ind = index_product.get()
 		ind = (ind[:,0],ind[:,1])
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
-		self.Wx = sp_sparse.coo_matrix( (weight_product.get(),ind),shape=( n_nodes_prod,n_nodes_prod ) )
 
+		self.Wx = sp_sparse.coo_matrix( (weight_product.get(),ind),shape=( n_nodes_prod,n_nodes_prod ) )
+		self.Wx += self.Wx.transpose()
+		print(self.Wx)
+		print(np.sum(self.Wx))
 		driver.Context.synchronize()
 		print('GPU - Kron : %f' %(time()-t0))
 
