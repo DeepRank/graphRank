@@ -80,8 +80,6 @@ class graphRank(object):
 		K = []
 		t0 = time()
 		self.px /= np.sum(self.px)
-		
-
 		K.append(np.dot(self.px*self.W0,self.px))
 		pW = self.Wx.transpose().dot(self.px)
 		
@@ -90,8 +88,6 @@ class graphRank(object):
 			pW = self.Wx.transpose().dot(pW)
 		print('K          : %f' %(time()-t0))
 		return K
-
-
 
 	##############################################################
 	#
@@ -122,6 +118,7 @@ class graphRank(object):
 		# final size	
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 
+		# create the Wx matrix
 		self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
 
@@ -140,8 +137,6 @@ class graphRank(object):
 		t0 = time()
 		self.W0  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[g1.nodes_pssm_data,g2.nodes_pssm_data]) ])
 		print('CPU - W0   : %f' %(time()-t0))
-
-
 	
 	def _get_data(self,g1,g2,k):
 
@@ -187,12 +182,11 @@ class graphRank(object):
 
 		t0 = time()
 		driver.Context.synchronize()
-
 		create_kron_mat_gpu = self.mod.get_function('create_kron_mat')
 
 		n1 = g1.num_edges
 		n2 = g2.num_edges
-		n_edges_prod = n1*n2
+		n_edges_prod = 2*n1*n2
 
 		pssm1 = gpuarray.to_gpu(np.array(g1.edges_pssm).astype(np.float32))
 		pssm2 = gpuarray.to_gpu(np.array(g2.edges_pssm).astype(np.float32))

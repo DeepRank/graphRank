@@ -1,4 +1,5 @@
 #include <math.h>
+
 // the sim function
 __host__ __device__ float rbf_kernel(float a, float b)
 {
@@ -21,12 +22,14 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 
 	int tx = threadIdx.x + blockDim.x * blockIdx.x;
 	int ty = threadIdx.y + blockDim.y * blockIdx.y;
-	int ind,len;
+	int ind,len = 40;
+	int half_len = len/2;
 
 	if ( (tx < n_edges_1) && (ty < n_edges_2) ){ 
 
-		
-		len = 40;
+		// first pass
+		// i-j VS a-b
+
 		ind = tx * n_edges_2 + ty;
 
 		float sim = 0;
@@ -34,9 +37,24 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 			sim += rbf_kernel(edges_pssm_1[tx*len + i],edges_pssm_2[ty*len + i]);
 		}			
 
-		edges_weight_product[ind] = sim;
+		edges_weight_product[ind]       = sim;
 		edges_index_product[2*ind]      = edges_index_1[2*tx]   * n_nodes_2   + edges_index_2[2*ty];
 		edges_index_product[2*ind + 1]  = edges_index_1[2*tx+1] * n_nodes_2   + edges_index_2[2*ty+1];
+
+		// second pass
+		// j-i VS a-b
+		ind = ind + n_edges_1 * n_edges_2
+
+		float sim = 0;
+		for(int i=0;i<half_len;i++){
+			sim += rbf_kernel(edges_pssm_1[tx*len + half_len + i],edges_pssm_2[ty*len + i]);
+			sim += rbf_kernel(edges_pssm_1[tx*len + i],edges_pssm_2[ty*len + half_len + i]);
+		}			
+
+		edges_weight_product[ind]       = sim;
+		edges_index_product[2*ind]      = edges_index_1[2*tx+1]   * n_nodes_2   + edges_index_2[2*ty];
+		edges_index_product[2*ind + 1]  = edges_index_1[2*tx] * n_nodes_2   + edges_index_2[2*ty+1];
+
 	}
 }
 
