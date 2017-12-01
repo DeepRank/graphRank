@@ -4,6 +4,7 @@ import numpy as np
 import timeit 
 from time import time
 import itertools 
+from collections import OrderedDict
 
 try:
 	from pycuda import driver, compiler, gpuarray, tools
@@ -32,11 +33,13 @@ class GraphMat(object):
 
 class graphRank(object):
 
-	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='../graphMAT/'):
+	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='../graphMAT/',gpu_block=(8,8,1)):
 
 		self.trainIDs = trainIDs
 		self.testIDs = testIDs
 		self.graph_path = graph_path
+		self.kernel = './cuda_kernel.c'
+		self.gpu_block = gpu_block
 
 	##############################################################
 	#
@@ -171,14 +174,14 @@ class graphRank(object):
 	##############################################################
 
 	# compile the cuda kernel
-	def compile_kernel(self,fname):
+	def compile_kernel(self):
 		t0 = time()
-		kernel_code = open(fname, 'r').read()
+		kernel_code = open(self.kernel, 'r').read()
 		self.mod = compiler.SourceModule(kernel_code)
 		print('GPU - Kern : %f' %(time()-t0))
 
 	# kronecker matrix with the edges pssm
-	def compute_kron_mat_cuda(self,g1,g2):
+	def compute_kron_mat_cuda(self,g1,g2,gpu_block=None):
 
 		t0 = time()
 		driver.Context.synchronize()
@@ -197,10 +200,15 @@ class graphRank(object):
 		weight_product = gpuarray.zeros(n_edges_prod, np.float32)
 		index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
 
-		block = (5,5,1)
+
+		if gpu_block is not None:
+			block = gpu_block
+		else:
+			block = self.gpu_block
 		dim = (n1,n2,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
+		t0 = time()
 		create_kron_mat_gpu (ind1,ind2,
 							 pssm1,pssm2,
 			                 index_product,weight_product,
@@ -213,14 +221,13 @@ class graphRank(object):
 
 		self.Wx = sp_sparse.coo_matrix( (weight_product.get(),ind),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
-		print(self.Wx)
-		print(np.sum(self.Wx))
+
 		driver.Context.synchronize()
-		print('GPU - Kron : %f' %(time()-t0))
+		print('GPU - Kron : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
 
 
 	# Px vector with the node info
-	def compute_px_cuda(self,g1,g2):
+	def compute_px_cuda(self,g1,g2,gpu_block=None):
 
 		t0 = time()
 		driver.Context.synchronize()
@@ -232,17 +239,20 @@ class graphRank(object):
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 		pvect = gpuarray.zeros(n_nodes_prod,np.float32)
 
-		block = (5,5,1)
+		if gpu_block is not None:
+			block = gpu_block
+		else:
+			block = self.gpu_block
 		dim = (g1.num_nodes,g2.num_nodes,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
 		create_p_vect(info1,info2,pvect,g1.num_nodes,g2.num_nodes,block=block,grid=grid)
 		self.px = pvect.get()
 		driver.Context.synchronize()
-		print('GPU - Px   : %f' %(time()-t0))
+		print('GPU - Px   : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
 
 	# W0 matrix with the nodes pssm
-	def compute_W0_cuda(self,g1,g2):
+	def compute_W0_cuda(self,g1,g2,gpu_block=None):
 
 		t0 = time()
 		driver.Context.synchronize()
@@ -253,28 +263,123 @@ class graphRank(object):
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 		w0 = gpuarray.zeros(n_nodes_prod,np.float32)
 
-		block = (5,5,1)
+		if gpu_block is not None:
+			block = gpu_block
+		else:
+			block = self.gpu_block
 		dim = (g1.num_nodes,g2.num_nodes,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
 		compute(pssm1,pssm2,w0,g1.num_nodes,g2.num_nodes,block=block,grid=grid)
 		self.W0 = w0.get()
 		driver.Context.synchronize()
-		print('GPU - W0   : %f' %(time()-t0))
+		print('GPU - W0   : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+
+	def tune_kernel(self,g1,g2,func='create_kron_mat',test_all_func=False):
+
+		try:
+			from kernel_tuner import tune_kernel
+		except:
+			print('Install the Kernel Tuner : \n \t\t pip install kernel_tuner')
+			print('http://benvanwerkhoven.github.io/kernel_tuner/')		
+
+		tune_params = OrderedDict()
+		tune_params['block_size_x'] = [2,4,8,16,32,64,128]
+		tune_params['block_size_y'] = [2,4,8,16,32,64,128]
+
+		kernel_code = open(self.kernel, 'r').read()
+		tunable_kernel = self._tunable_kernel(kernel_code)
+
+		try:
+
+			if func == 'create_kron_mat' or test_all_func:
+
+				func = 'create_kron_mat'
+				print('\n')
+				print('Tuning function %s from %s' %(func,self.kernel))
+				print('-'*40)
+
+				n1 = g1.num_edges
+				n2 = g2.num_edges
+				n_edges_prod = 2*n1*n2
+
+				pssm1 = np.array(g1.edges_pssm).astype(np.float32)
+				pssm2 = np.array(g2.edges_pssm).astype(np.float32)
+
+				ind1 = np.array(g1.edges_index).astype(np.int32)
+				ind2 = np.array(g2.edges_index).astype(np.int32)
+
+				weight_product = np.zeros(n_edges_prod, np.float32)
+				index_product = np.zeros((n_edges_prod,2), np.int32)
+
+				dim = (n1,n2,1)
+				args = [ind1,ind2,pssm1,pssm2,index_product,weight_product,n1,n2,g2.num_nodes]
+
+				result = tune_kernel(func,tunable_kernel,dim,args,tune_params)
+
+			if func == 'create_nodesim_mat' or test_all_func:
+
+				func = 'create_nodesim_mat'
+				print('\n')
+				print('Tuning function %s from %s' %(func,self.kernel))
+				print('-'*40)
+
+				pssm1 = np.array(g1.nodes_pssm_data).astype(np.float32)
+				pssm2 = np.array(g2.nodes_pssm_data).astype(np.float32)
+				n_nodes_prod = g1.num_nodes*g2.num_nodes
+				w0 = np.zeros(n_nodes_prod,np.float32)
+
+				dim = (g1.num_nodes,g2.num_nodes,1)
+				args = [pssm1,pssm2,w0,g1.num_nodes,g2.num_nodes]
+
+				result = tune_kernel(func,tunable_kernel,dim,args,tune_params)
+
+			if func == 'create_p_vect' or test_all_func:
+
+				func = 'create_p_vect'
+				print('\n')
+				print('Tuning function %s from %s' %(func,self.kernel))
+				print('-'*40)
+
+				info1 = np.array(g1.nodes_info_data).astype(np.float32)
+				info2 = np.array(g2.nodes_info_data).astype(np.float32)
+				n_nodes_prod = g1.num_nodes*g2.num_nodes
+				pvect = np.zeros(n_nodes_prod,np.float32)
+
+				dim = (g1.num_nodes,g2.num_nodes,1)
+				args = [info1,info2,pvect,g1.num_nodes,g2.num_nodes]
+
+				result = tune_kernel(func,tunable_kernel,dim,args,tune_params)
+
+		except:
+
+			print('Function %s not found in %s' %(func,self.kernel))
+
+
 
 		
+
+	@staticmethod
+	def _tunable_kernel(kernel):
+		switch_name = { 'blockDim.x' : 'block_size_x', 'blockDim.y' : 'block_size_y' }
+		for old,new in switch_name.items():
+			kernel = kernel.replace(old,new)
+		return kernel
 
 if __name__ == "__main__":
 
 	import argparse 
 	parser = argparse.ArgumentParser(description=' test graphRank')
 	parser.add_argument('--cuda',action='store_true')
+	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int)
+	parser.add_argument('--tune_kernel',action='store_true')
+	parser.add_argument('--func',type=str,default='all')
+
+
 	args = parser.parse_args()
 
-	GR = graphRank()
+	GR = graphRank(gpu_block=tuple(args.gpu_block))
 	GR.import_from_mat()
-
-	
 
 	print('')
 	print('-'*20)
@@ -282,28 +387,37 @@ if __name__ == "__main__":
 	print('-'*20)
 	print('')
 
-	if args.cuda:
-		GR.compile_kernel('./cuda_kernel.c')
-		GR.compute_kron_mat_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-		GR.compute_px_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-		GR.compute_W0_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+	if args.tune_kernel:
+		if args.func == 'all':
+			test_all_func=True
+		else:
+			test_all_func=False
+		GR.tune_kernel(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'],func=args.func,test_all_func=args.func=='all')
+
 	else:
-		GR.compute_kron_mat(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-		GR.compute_px(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-		GR.compute_W0(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])		
+		if args.cuda:
+			GR.compile_kernel()
+			GR.compute_kron_mat_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+			GR.compute_px_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+			GR.compute_W0_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+	
+		else:
+			GR.compute_kron_mat(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+			GR.compute_px(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+			GR.compute_W0(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])		
 
-	K = GR.compute_K(lamb=1,walk=4)
-	Kcheck = spio.loadmat('../kernelMAT/K_testID.mat')['K'][0][0]
+		K = GR.compute_K(lamb=1,walk=4)
+		Kcheck = spio.loadmat('../kernelMAT/K_testID.mat')['K'][0][0]
 
-	print('')
-	print('-'*20)
-	print('- Accuracy')
-	print('-'*20)
-	print('')
+		print('')
+		print('-'*20)
+		print('- Accuracy')
+		print('-'*20)
+		print('')
 
-	print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K))))
-	print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck))))
-	#assert np.allclose(K,Kcheck)
+		print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K))))
+		print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck))))
+	
 
 
 
