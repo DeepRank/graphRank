@@ -12,6 +12,7 @@ You can check all the options of the code using
 python graphRank.py --help
 ```
 
+```
 usage: graphRank.py [-h] [--tune_kernel] [--test] [--lamb LAMB] [--walk WALK]
                     [--outfile OUTFILE] [--func FUNC] [--cuda]
                     [--gpu_block GPU_BLOCK [GPU_BLOCK ...]]
@@ -31,6 +32,7 @@ optional arguments:
   --cuda                Use CUDA kernel if present
   --gpu_block GPU_BLOCK [GPU_BLOCK ...]
                         number of gpu block to use (default 8 8 1)
+```
 
 # Test 
 
