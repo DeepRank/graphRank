@@ -1,10 +1,10 @@
 import scipy.io as spio
 import scipy.sparse as sp_sparse
 import numpy as np 
-import timeit 
 from time import time
 import itertools 
 from collections import OrderedDict
+import pickle 
 
 try:
 	from pycuda import driver, compiler, gpuarray, tools
@@ -49,15 +49,22 @@ class graphRank(object):
 
 	def import_from_mat(self):
 
+		self.max_num_edges_train = 0
+		self.max_num_edges_test = 0
+
 		self.train_graphs = {}
 		train_names = self._get_file_names(self.trainIDs)
-		for name in train_names:
-			self.train_graphs[name] = self._import_single_graph_from_mat(self.graph_path + '/' + name)
 
 		self.test_graphs = {}
 		test_names  = self._get_file_names(self.testIDs)
+		
+		for name in train_names:
+			self.train_graphs[name] = self._import_single_graph_from_mat(self.graph_path + '/' + name)
+			self.max_num_edges_train = np.max([self.max_num_edges_train,self.train_graphs[name].num_edges])
+		
 		for name in test_names:
 			self.test_graphs[name] = self._import_single_graph_from_mat(self.graph_path + '/' + name)
+			self.max_num_edges_test = np.max([self.max_num_edges_test,self.test_graphs[name].num_edges])
 
 	@staticmethod
 	def _import_single_graph_from_mat(fname):
@@ -70,7 +77,56 @@ class graphRank(object):
 			names = [name.split()[0] for name in f.readlines() if name.split()]
 		return names
 
+	##############################################################
+	#
+	# Main function to compute all the data
+	#
+	##############################################################
+	
+	def run(self,lamb,walk,outfile='kernel.pkl',cuda=False,gpu_block=(8,8,1)):
 
+		# do all the single-time cuda operations
+		if args.cuda:
+
+			# compile the kernel
+			GR.compile_kernel()
+
+			# prebook the weight and index matrix
+			# required for the calculation of self.Wx
+			n1 = self.max_num_edges_test
+			n2 = self.max_num_edges_train
+			n_edges_prod = 2*n1*n2
+			self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
+			self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
+
+		# store the parametres
+		K = {}
+		K['lambda'] = lamb
+		K['walk'] = walk
+		K['cuda'] = cuda
+		K['gpu_block'] = gpu_block
+
+		# go through all the data
+		for name1,G1 in self.test_graphs.items():
+			for name2,G2 in self.train_graphs.items():
+
+				# compute the matrices
+				if args.cuda:
+					self.compute_kron_mat_cuda(G1,G2)
+					self.compute_px_cuda(G1,G2)
+					self.compute_W0_cuda(G1,G2)
+			
+				else:
+					self.compute_kron_mat(G1,G2)
+					self.compute_px(G1,G2)
+					self.compute_W0(G1,G2)		
+
+				# compute the kernel
+				K[(name1,name2)] = self.compute_K(lamb=lamb,walk=walk)
+				print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K[(name1,name2)]))))
+				
+		# save the data
+		pickle.dump(K,open(outfile,'wb'))
 
 	##############################################################
 	#
@@ -124,7 +180,6 @@ class graphRank(object):
 		# create the Wx matrix
 		self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
-		print(np.sum(self.Wx))
 		print('CPU - Kron : %f' %(time()-t0))
 
 	# px vector calculation with nodes info
@@ -197,10 +252,14 @@ class graphRank(object):
 		ind1 = gpuarray.to_gpu(np.array(g1.edges_index).astype(np.int32))
 		ind2 = gpuarray.to_gpu(np.array(g2.edges_index).astype(np.int32))
 
-		weight_product = gpuarray.zeros(n_edges_prod, np.float32)
-		index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
+		# create the gpu arrays only if we have to
+		# i.e. in case we run the calculation once (test or tune)
+		# in other cases the weigh and index are booked in self.run()
+		if not hasattr(self,'weight_product'):
+			self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
+			self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
 
-
+		# get the gpu block size if specified
 		if gpu_block is not None:
 			block = gpu_block
 		else:
@@ -208,18 +267,28 @@ class graphRank(object):
 		dim = (n1,n2,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
-		t0 = time()
+		driver.Context.synchronize()
+		print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+
+		# call the CUDA kernel
+		t0 =time()
 		create_kron_mat_gpu (ind1,ind2,
 							 pssm1,pssm2,
-			                 index_product,weight_product,
+			                 self.index_product,self.weight_product,
 			                 n1,n2,g2.num_nodes,
 							 block=block,grid=grid)
 
-		ind = index_product.get()
-		ind = (ind[:,0],ind[:,1])
+		# extract the data
+		# restrict to the ones calculated here
+		ind = self.index_product.get()
+		ind = (ind[:n_edges_prod,0],ind[:n_edges_prod,1])
+		w = self.weight_product.get()[:n_edges_prod]
+
+		# final size
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 
-		self.Wx = sp_sparse.coo_matrix( (weight_product.get(),ind),shape=( n_nodes_prod,n_nodes_prod ) )
+		# create the matrix
+		self.Wx = sp_sparse.coo_matrix( (w,ind),shape=( n_nodes_prod,n_nodes_prod ) )
 		self.Wx += self.Wx.transpose()
 
 		driver.Context.synchronize()
@@ -274,6 +343,13 @@ class graphRank(object):
 		self.W0 = w0.get()
 		driver.Context.synchronize()
 		print('GPU - W0   : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+
+
+	##############################################################
+	#
+	# kernel tuner
+	#
+	##############################################################
 
 	def tune_kernel(self,g1,g2,func='create_kron_mat',test_all_func=False):
 
@@ -355,10 +431,7 @@ class graphRank(object):
 
 			print('Function %s not found in %s' %(func,self.kernel))
 
-
-
-		
-
+	# tranform the kernel to a tunable one
 	@staticmethod
 	def _tunable_kernel(kernel):
 		switch_name = { 'blockDim.x' : 'block_size_x', 'blockDim.y' : 'block_size_y' }
@@ -366,31 +439,44 @@ class graphRank(object):
 			kernel = kernel.replace(old,new)
 		return kernel
 
+
+
 if __name__ == "__main__":
 
 	import argparse 
 	parser = argparse.ArgumentParser(description=' test graphRank')
-	parser.add_argument('--cuda',action='store_true')
-	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int)
-	parser.add_argument('--tune_kernel',action='store_true')
-	parser.add_argument('--func',type=str,default='all')
 
+	parser.add_argument('--tune_kernel',action='store_true',help='Only tune the CUDA kernel if present')
+	parser.add_argument('--test',action='store_true',help='Only test the functions on a single pair pair of graph if present')
+
+	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations')
+	parser.add_argument('--walk',type=int,default=4,help='Max walk length in the Kernel calculations')
+	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the Kernel')
+
+	parser.add_argument('--func',type=str,default='all',help='Which functions to tune in the kernel (defaut all functions)')
+	parser.add_argument('--cuda',action='store_true', help='Use CUDA kernel if present')
+	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int,help='number of gpu block to use (default 8 8 1)')
 
 	args = parser.parse_args()
 
+
+	# init and load the data
 	GR = graphRank(gpu_block=tuple(args.gpu_block))
 	GR.import_from_mat()
 
-	print('')
-	print('-'*20)
-	print('- timing')
-	print('-'*20)
-	print('')
-
+	# only tune the kernel
 	if args.tune_kernel:
 		GR.tune_kernel(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'],func=args.func,test_all_func=args.func=='all')
 
-	else:
+	# only run a pair of graph with or w/o CUDA
+	elif args.test:
+
+		print('')
+		print('-'*20)
+		print('- timing')
+		print('-'*20)
+		print('')
+
 		if args.cuda:
 			GR.compile_kernel()
 			GR.compute_kron_mat_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
@@ -414,8 +500,9 @@ if __name__ == "__main__":
 		print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K))))
 		print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck))))
 	
-
-
+	# run the entire calculation
+	else :
+		GR.run(lamb=args.lamb,walk=args.walk,outfile=args.outfile,cuda=args.cuda,gpu_block=tuple(args.gpu_block))
 
 
 
