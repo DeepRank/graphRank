@@ -388,10 +388,6 @@ if __name__ == "__main__":
 	print('')
 
 	if args.tune_kernel:
-		if args.func == 'all':
-			test_all_func=True
-		else:
-			test_all_func=False
 		GR.tune_kernel(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'],func=args.func,test_all_func=args.func=='all')
 
 	else:
@@ -422,31 +418,4 @@ if __name__ == "__main__":
 
 
 
-
-
-
-# setup = '''
-# from __main__ import graphRank
-# GR = graphRank()
-# '''
-# stmt = '''
-# GR.import_from_mat()
-# '''
-# n = 100
-# t = timeit.Timer(setup=setup,stmt=stmt).timeit(n)
-# print('Import of the graph takes %1.3f s. ' %(t/n))
-
-
-
-# setup = '''
-# from __main__ import graphRank
-# GR = graphRank()
-# GR.import_from_mat()
-# '''
-# stmt = '''
-# GR.compute_kron_mat(GR.train_graphs['1IRA'],GR.test_graphs['2OZA'])
-# '''
-# n = 10
-# t = timeit.Timer(setup=setup,stmt=stmt).timeit(n)
-# print('Compute the bi-graph takes %1.3f s. ' %(t/n))
 
