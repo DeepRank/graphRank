@@ -93,11 +93,13 @@ class graphRank(object):
 
 			# prebook the weight and index matrix
 			# required for the calculation of self.Wx
+			t0 = time()
 			n1 = self.max_num_edges_test
 			n2 = self.max_num_edges_train
 			n_edges_prod = 2*n1*n2
 			self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
 			self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
+			print('GPU - Mem  : %f' %(time()-t0))
 
 		# store the parametres
 		K = {}
@@ -110,6 +112,9 @@ class graphRank(object):
 		for name1,G1 in self.test_graphs.items():
 			for name2,G2 in self.train_graphs.items():
 
+				print('')
+				print(name1,name2)
+				print('-'*20)
 				# compute the matrices
 				if args.cuda:
 					self.compute_kron_mat_cuda(G1,G2)
@@ -123,6 +128,7 @@ class graphRank(object):
 
 				# compute the kernel
 				K[(name1,name2)] = self.compute_K(lamb=lamb,walk=walk)
+				print('-'*20)
 				print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K[(name1,name2)]))))
 				
 		# save the data
@@ -145,7 +151,7 @@ class graphRank(object):
 		for i in range(1,walk+1):
 			K.append(   K[i-1] + lamb**i * np.dot(pW,self.px) )
 			pW = self.Wx.transpose().dot(pW)
-		print('K          : %f' %(time()-t0))
+		print('CPU - K    : %f' %(time()-t0))
 		return K
 
 	##############################################################
