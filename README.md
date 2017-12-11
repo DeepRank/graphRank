@@ -48,7 +48,13 @@ alias graphRank=/path/to/the/library/graphRank.py
 
 ```
 
-You can add the file to your bin or add the folder to your path. You can test the code using a precomputed example using
+You can add the file to your bin or add the folder to your path. To test the code first go to the test folder
+
+```
+cd test_code2
+```
+
+Then you can test the CPU/GPU version of the code with:
 
 ## CPU version
 ```
