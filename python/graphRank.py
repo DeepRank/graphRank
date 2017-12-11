@@ -7,6 +7,7 @@ from time import time
 import itertools 
 from collections import OrderedDict
 import pickle 
+import os
 
 try:
 	from pycuda import driver, compiler, gpuarray, tools
@@ -35,13 +36,17 @@ class GraphMat(object):
 
 class graphRank(object):
 
-	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='../graphMAT/',gpu_block=(8,8,1)):
+	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='./graphMAT/',gpu_block=(8,8,1)):
 
+		# all the options
 		self.trainIDs = trainIDs
 		self.testIDs = testIDs
-		self.graph_path = graph_path
-		self.kernel = './cuda_kernel.c'
+		self.graph_path = graph_path		
 		self.gpu_block = gpu_block
+
+		# the cuda kernel
+		self.kernel = os.path.dirname(os.path.abspath(__file__)) + '/cuda_kernel.c'
+		assert os.path.isfile(self.kernel)
 
 	##############################################################
 	#
