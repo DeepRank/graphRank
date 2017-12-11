@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import scipy.io as spio
 import scipy.sparse as sp_sparse
 import numpy as np 
@@ -452,13 +454,29 @@ if __name__ == "__main__":
 	import argparse 
 	parser = argparse.ArgumentParser(description=' test graphRank')
 
+	# test and train IDS
+	parser.add_argument('--testID', type=str, default='./testID.lst',help='list of ID for testing')
+	parser.add_argument('--trainID', type=str, default='./trainID.lst',help='list of ID for training')
+
+	# graphs of the individual complex
+	parser.add_argument('--graph',type=str,default='./graphMAT',help='folder containing the graph of each complex')
+
+	# file containing the kernel for checking
+	parser.add_argument('--check',type=str,default='./kernelMAT/K_testID.mat',help='file containing the kernel')
+
+	# where to write the output file
+	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the Kernel')
+
+	# what to do:  tune the kernel, test the calculation, run the entire calculations
 	parser.add_argument('--tune_kernel',action='store_true',help='Only tune the CUDA kernel if present')
 	parser.add_argument('--test',action='store_true',help='Only test the functions on a single pair pair of graph if present')
 
+	# parameter of the calculations
 	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations')
 	parser.add_argument('--walk',type=int,default=4,help='Max walk length in the Kernel calculations')
-	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the Kernel')
+	
 
+	# cuda parameters
 	parser.add_argument('--func',type=str,default='all',help='Which functions to tune in the kernel (defaut all functions)')
 	parser.add_argument('--cuda',action='store_true', help='Use CUDA kernel if present')
 	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int,help='number of gpu block to use (default 8 8 1)')
@@ -467,12 +485,14 @@ if __name__ == "__main__":
 
 
 	# init and load the data
-	GR = graphRank(gpu_block=tuple(args.gpu_block))
+	GR = graphRank(testIDs=args.testID,trainIDs=args.trainID,graph_path=args.graph,gpu_block=tuple(args.gpu_block))
 	GR.import_from_mat()
 
 	# only tune the kernel
 	if args.tune_kernel:
-		GR.tune_kernel(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'],func=args.func,test_all_func=args.func=='all')
+		test_name = list(GR.test_graphs.keys())[0]
+		train_name = list(GR.train_graphs.keys())[0]
+		GR.tune_kernel(GR.test_graphs[test_name],GR.train_graphs[train_name],func=args.func,test_all_func=args.func=='all')
 
 	# only run a pair of graph with or w/o CUDA
 	elif args.test:
@@ -483,19 +503,22 @@ if __name__ == "__main__":
 		print('-'*20)
 		print('')
 
+		test_name = list(GR.test_graphs.keys())[0]
+		train_name = list(GR.train_graphs.keys())[0]
+
 		if args.cuda:
 			GR.compile_kernel()
-			GR.compute_kron_mat_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-			GR.compute_px_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-			GR.compute_W0_cuda(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
+			GR.compute_kron_mat_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
+			GR.compute_px_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
+			GR.compute_W0_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
 	
 		else:
-			GR.compute_kron_mat(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-			GR.compute_px(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])
-			GR.compute_W0(GR.test_graphs['2OZA'],GR.train_graphs['1IRA'])		
+			GR.compute_kron_mat(GR.test_graphs[test_name],GR.train_graphs[train_name])
+			GR.compute_px(GR.test_graphs[test_name],GR.train_graphs[train_name])
+			GR.compute_W0(GR.test_graphs[test_name],GR.train_graphs[train_name])		
 
-		K = GR.compute_K(lamb=1,walk=4)
-		Kcheck = spio.loadmat('../kernelMAT/K_testID.mat')['K'][0][0]
+		K = GR.compute_K(lamb=args.lamb,walk=args.walk)
+		Kcheck = spio.loadmat(args.check)['K'][0][0]
 
 		print('')
 		print('-'*20)
