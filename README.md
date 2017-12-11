@@ -13,39 +13,51 @@ python graphRank.py --help
 ```
 
 ```
-usage: graphRank.py [-h] [--tune_kernel] [--test] [--lamb LAMB] [--walk WALK]
-                    [--outfile OUTFILE] [--func FUNC] [--cuda]
-                    [--gpu_block GPU_BLOCK [GPU_BLOCK ...]]
+usage: graphRank.py [-h] [--testID TESTID] [--trainID TRAINID] [--graph GRAPH]
+                    [--check CHECK] [--outfile OUTFILE] [--tune_kernel]
+                    [--test] [--lamb LAMB] [--walk WALK] [--func FUNC]
+                    [--cuda] [--gpu_block GPU_BLOCK [GPU_BLOCK ...]]
 
 test graphRank
 
 optional arguments:
   -h, --help            show this help message and exit
+  --testID TESTID       list of ID for testing
+  --trainID TRAINID     list of ID for training
+  --graph GRAPH         folder containing the graph of each complex
+  --check CHECK         file containing the kernel
+  --outfile OUTFILE     Output file containing the Kernel
   --tune_kernel         Only tune the CUDA kernel if present
   --test                Only test the functions on a single pair pair of graph
                         if present
   --lamb LAMB           Lambda parameter in the Kernel calculations
   --walk WALK           Max walk length in the Kernel calculations
-  --outfile OUTFILE     Output file containing the Kernel
   --func FUNC           Which functions to tune in the kernel (defaut all
                         functions)
   --cuda                Use CUDA kernel if present
   --gpu_block GPU_BLOCK [GPU_BLOCK ...]
                         number of gpu block to use (default 8 8 1)
+
 ```
 
 # Test 
+Before testing/using the code it must be made available in your path. You can for example create an alias in your .bashrc
 
-You can test the code using a precomputed example using
+```
+alias graphRank=/path/to/the/library/graphRank.py
+
+```
+
+You can add the file to your bin or add the folder to your path. You can test the code using a precomputed example using
 
 ## CPU version
 ```
-python graphRank.py --test
+graphRank --test
 ```
 
 ## GPU version
 ```
-python graphRank.py --test --cuda
+graphRank --test --cuda
 ```
 
 which should output (GPU version)
@@ -75,7 +87,7 @@ Kcheck :  1.57e-05  4.61e-05  0.000175  0.000491  0.00192
 You can tune the gpu block/grid size using the kernel tuner. Simply type
 
 ```
-python graphRank.py --tune_kernel [--func=<func_name>]
+graphRank --tune_kernel [--func=<func_name>]
 ```
 
 If you don't specify a function name (present in cuda_kernel.c) the code will tune all the functios. For each function it should output something like:
@@ -100,7 +112,7 @@ best performing configuration: block_size_x=8, block_size_y=8, time=0.1619583964
 You can run the calculation on the entire training/test set using
 
 ```
-python graphRank.py [--cuda] [--lamb=X] [--walk=X] [--outfile=name] [--gpu_block=i j k]
+graphRank [--cuda] [--lamb=X] [--walk=X] [--outfile=name] [--gpu_block=i j k]
 ```
 
 In the GPU case the code will first output the timing of the kernel compilation and GPU memory assignement 
