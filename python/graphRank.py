@@ -586,7 +586,7 @@ if __name__ == "__main__":
 	
 	# run the entire calculation
 	else :
-		GR.run(lamb=args.lamb,walk=args.walk,outfile=args.outfile,cuda=args.cuda,gpu_block=tuple(args.gpu_block))
+		GR.run(lamb=args.lamb,walk=args.walk,outfile=args.outfile,cuda=args.cuda,gpu_block=tuple(args.gpu_block),check=checkfile)
 
 
 
