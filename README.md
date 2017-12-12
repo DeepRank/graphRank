@@ -92,15 +92,15 @@ Kcheck :  1.57e-05  4.61e-05  0.000175  0.000491  0.00192
 
 The timing part output the execution time for the main steps of the calculation. 
 
-  . GPU - Kern : time needed to compile the cuda kernel
-  . GPU - Mem  : time needed to book the memeory on the GPU
+  * GPU - Kern : time needed to compile the cuda kernel
+  * GPU - Mem  : time needed to book the memeory on the GPU
 
 These two steps are needed only once when calculating the kernels of several pairs.
 
-  . GPU - Kron : time needed to compute the kronecker matrix
-  . GPU - Px   : time needed to compute the Px vector
-  . GPU - W0   : time needed to compute the W0 matrix
-  . CPU - K    : time needed to compute the kernels
+  * GPU - Kron : time needed to compute the kronecker matrix
+  * GPU - Px   : time needed to compute the Px vector
+  * GPU - W0   : time needed to compute the W0 matrix
+  * CPU - K    : time needed to compute the kernels
 
 The last step can only be done on CPU as it won't be much faster on GPUs
 
