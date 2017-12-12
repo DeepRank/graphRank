@@ -36,7 +36,7 @@ class GraphMat(object):
 
 class graphRank(object):
 
-	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='./graphMAT/',gpu_block=(8,8,1)):
+	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='graphMAT/',gpu_block=(8,8,1)):
 
 		# all the options
 		self.trainIDs = trainIDs
@@ -84,13 +84,29 @@ class graphRank(object):
 			names = [name.split()[0] for name in f.readlines() if name.split()]
 		return names
 
+	# try to find the check file. 
+	# return the filename is it's not None
+	# return ./kernelMAT/K_<test_name>.mat if this file exists
+	# return None otherwise
+	def get_check_file(self,fname):
+		if fname is not None:
+			return fname
+		else:
+			test_name = os.path.splitext(self.testIDs)[0]
+			kname = 'kernelMAT/K_' + test_name + '.mat'
+			if os.path.isfile(kname):
+				return kname 
+			else:
+				return None
+
+
 	##############################################################
 	#
 	# Main function to compute all the data
 	#
 	##############################################################
 	
-	def run(self,lamb,walk,outfile='kernel.pkl',cuda=False,gpu_block=(8,8,1)):
+	def run(self,lamb,walk,outfile='kernel.pkl',cuda=False,gpu_block=(8,8,1),check=None):
 
 		# do all the single-time cuda operations
 		if args.cuda:
@@ -115,9 +131,12 @@ class graphRank(object):
 		K['cuda'] = cuda
 		K['gpu_block'] = gpu_block
 
+		# check file if it exists
+		Kcheck = spio.loadmat(check)['K']
+
 		# go through all the data
-		for name1,G1 in self.test_graphs.items():
-			for name2,G2 in self.train_graphs.items():
+		for i1,(name1,G1) in enumerate(self.test_graphs.items()):
+			for i2,(name2,G2) in enumerate(self.train_graphs.items()):
 
 				print('')
 				print(name1,name2)
@@ -133,13 +152,67 @@ class graphRank(object):
 					self.compute_px(G1,G2)
 					self.compute_W0(G1,G2)		
 
-				# compute the kernel
+				# compute/print the kernel
 				K[(name1,name2)] = self.compute_K(lamb=lamb,walk=walk)
 				print('-'*20)
 				print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K[(name1,name2)]))))
 				
+				# print the check if present
+				if check is not None:
+					print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck[i1][i2]))))
+
 		# save the data
 		pickle.dump(K,open(outfile,'wb'))
+
+
+	########################################################
+	#
+	#	Test the routine on a single pair
+	#
+	########################################################
+	def test(self,lamb,walk,cuda=False,gpu_block=(8,8,1), check=None,itest=None,itrain=None):
+
+		if check is None:
+			print('Warning: the check file containing the precomputed kernel was not found')
+
+		print('')
+		print('-'*20)
+		print('- timing')
+		print('-'*20)
+		print('')
+
+		# get a random index of the test/train
+		if itest is None:
+			itest = np.random.randint(len(self.test_graphs))
+		if itrain is None:
+			itrain = np.random.randint(len(self.train_graphs))
+
+		# get the names
+		test_name = list(self.test_graphs.keys())[itest]
+		train_name = list(self.train_graphs.keys())[itrain]
+
+		if cuda:
+			self.compile_kernel()
+			self.compute_kron_mat_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
+			self.compute_px_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
+			self.compute_W0_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
+	
+		else:
+			self.compute_kron_mat(self.test_graphs[test_name],self.train_graphs[train_name])
+			self.compute_px(self.test_graphs[test_name],self.train_graphs[train_name])
+			self.compute_W0(self.test_graphs[test_name],self.train_graphs[train_name])		
+
+		K = GR.compute_K(lamb=lamb,walk=walk)
+		
+		print('')
+		print('-'*20)
+		print('- Accuracy')
+		print('-'*20)
+		print('')
+		print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K))))
+		if check is not None:
+			Kcheck = spio.loadmat(check)['K'][itest][itrain]
+			print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck))))
 
 	##############################################################
 	#
@@ -364,13 +437,20 @@ class graphRank(object):
 	#
 	##############################################################
 
-	def tune_kernel(self,g1,g2,func='create_kron_mat',test_all_func=False):
+	def tune_kernel(self,func='create_kron_mat',test_all_func=False):
 
 		try:
 			from kernel_tuner import tune_kernel
 		except:
 			print('Install the Kernel Tuner : \n \t\t pip install kernel_tuner')
 			print('http://benvanwerkhoven.github.io/kernel_tuner/')		
+
+
+		test_name = list(self.test_graphs.keys())[0]
+		train_name = list(self.train_graphs.keys())[0]
+
+		g1 = self.test_graphs[test_name],
+		g2 = self.train_graphs[train_name]
 
 		tune_params = OrderedDict()
 		tune_params['block_size_x'] = [2,4,8,16,32,64,128]
@@ -460,21 +540,21 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description=' test graphRank')
 
 	# test and train IDS
-	parser.add_argument('--testID', type=str, default='./testID.lst',help='list of ID for testing')
-	parser.add_argument('--trainID', type=str, default='./trainID.lst',help='list of ID for training')
+	parser.add_argument('--testID', type=str, default='testID.lst',help='list of ID for testing')
+	parser.add_argument('--trainID', type=str, default='trainID.lst',help='list of ID for training')
 
 	# graphs of the individual complex
-	parser.add_argument('--graph',type=str,default='./graphMAT',help='folder containing the graph of each complex')
+	parser.add_argument('--graph',type=str,default='graphMAT',help='folder containing the graph of each complex')
 
 	# file containing the kernel for checking
-	parser.add_argument('--check',type=str,default='./kernelMAT/K_testID.mat',help='file containing the kernel')
+	parser.add_argument('--check',type=str,default=None,help='file containing the kernel')
 
 	# where to write the output file
 	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the Kernel')
 
 	# what to do:  tune the kernel, test the calculation, run the entire calculations
-	parser.add_argument('--tune_kernel',action='store_true',help='Only tune the CUDA kernel if present')
-	parser.add_argument('--test',action='store_true',help='Only test the functions on a single pair pair of graph if present')
+	parser.add_argument('--tune_kernel',action='store_true',help='Only tune the CUDA kernel')
+	parser.add_argument('--test',action='store_true',help='Only test the functions on a single pair pair of graph ')
 
 	# parameter of the calculations
 	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations')
@@ -483,7 +563,7 @@ if __name__ == "__main__":
 
 	# cuda parameters
 	parser.add_argument('--func',type=str,default='all',help='Which functions to tune in the kernel (defaut all functions)')
-	parser.add_argument('--cuda',action='store_true', help='Use CUDA kernel if present')
+	parser.add_argument('--cuda',action='store_true', help='Use CUDA kernel')
 	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int,help='number of gpu block to use (default 8 8 1)')
 
 	args = parser.parse_args()
@@ -493,46 +573,16 @@ if __name__ == "__main__":
 	GR = graphRank(testIDs=args.testID,trainIDs=args.trainID,graph_path=args.graph,gpu_block=tuple(args.gpu_block))
 	GR.import_from_mat()
 
+	# get the path of the check file
+	checkfile = GR.get_check_file(args.check)
+
 	# only tune the kernel
 	if args.tune_kernel:
-		test_name = list(GR.test_graphs.keys())[0]
-		train_name = list(GR.train_graphs.keys())[0]
-		GR.tune_kernel(GR.test_graphs[test_name],GR.train_graphs[train_name],func=args.func,test_all_func=args.func=='all')
+		GR.tune_kernel(func=args.func,test_all_func=args.func=='all')
 
 	# only run a pair of graph with or w/o CUDA
 	elif args.test:
-
-		print('')
-		print('-'*20)
-		print('- timing')
-		print('-'*20)
-		print('')
-
-		test_name = list(GR.test_graphs.keys())[0]
-		train_name = list(GR.train_graphs.keys())[0]
-
-		if args.cuda:
-			GR.compile_kernel()
-			GR.compute_kron_mat_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
-			GR.compute_px_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
-			GR.compute_W0_cuda(GR.test_graphs[test_name],GR.train_graphs[train_name])
-	
-		else:
-			GR.compute_kron_mat(GR.test_graphs[test_name],GR.train_graphs[train_name])
-			GR.compute_px(GR.test_graphs[test_name],GR.train_graphs[train_name])
-			GR.compute_W0(GR.test_graphs[test_name],GR.train_graphs[train_name])		
-
-		K = GR.compute_K(lamb=args.lamb,walk=args.walk)
-		Kcheck = spio.loadmat(args.check)['K'][0][0]
-
-		print('')
-		print('-'*20)
-		print('- Accuracy')
-		print('-'*20)
-		print('')
-
-		print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K))))
-		print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck))))
+		GR.test(lamb=args.lamb,walk=args.walk,cuda=args.cuda,gpu_block=args.gpu_block, check=checkfile)
 	
 	# run the entire calculation
 	else :
