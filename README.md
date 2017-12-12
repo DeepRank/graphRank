@@ -102,7 +102,8 @@ These two steps are needed only once when calculating the kernels of several pai
   * GPU - W0   : time needed to compute the W0 matrix
   * CPU - K    : time needed to compute the kernels
 
-The last step can only be done on CPU as it won't be much faster on GPUs
+The last step can only be done on CPU as it won't be much faster on GPUs. 
+The code then output the values of the kernel calculated for the pair that was tested. If a valid .mat file containing the matlab precomputed kernel was found (typically ./kernelMAT/K_testID.mat), the code will also output these values for comparison.
 
 # Kernel Tuner
 
@@ -163,3 +164,54 @@ Kcheck :  0.000245  0.000402  0.00117  0.00166  0.00445
 As you can see if a check file (typically ./kernelMAT/K_testID.mat) is found it will also compare the values of the matlab code with the one calculated here. 
 
 
+# Results
+
+After the run the results will be dumped in a pickle file with default name kernel.pkl. You can read this file following
+
+```python
+import pickle
+fname = kernel.pkl
+K = pickle.load(open(python,'rb'))
+```
+
+K is then a dictionary with the following keys:
+
+```
+K['lambda']    : lambda value used for the calculation
+K['walk']      : walk length  used for the calculation
+K['cuda']      : was cuda used during the calcultion (useful ?)
+K['gpu_block'] : the gpu block size during the calculation (useful ?)
+K[(MOL1,MOL2)] : the values of the kernel calculated for this specific pair
+K[(MOL1,MOL3)] : the values of the kernel calculated for this specific pair
+K[(MOL2,MOL3)] : the values of the kernel calculated for this specific pair
+....
+```
+
+Using this results you can compare the python and matlab kernel values using the following script
+
+```python
+import matplotlib.pyplot as plt 
+import scipy.io as spio
+import pickle
+
+# matlab kernel file
+matlab = './kernelMAT/K_smalltestID.mat'
+
+# python kernel file
+python = './kernel.pkl'
+
+# load the data
+Kcheck = spio.loadmat(matlab)['K']
+K = pickle.load(open(python,'rb'))
+
+# plot the data
+N = len(Kcheck)
+keys = list(K.keys())[4:]
+k = 0
+for n1 in range(N):
+  M = len(Kcheck[n1])
+  for n2 in range(M):
+    plt.scatter(Kcheck[n1][n2],K[keys[k]])
+    k +=1
+plt.show()
+```
