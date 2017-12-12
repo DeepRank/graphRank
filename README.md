@@ -171,7 +171,7 @@ After the run the results will be dumped in a pickle file with default name kern
 ```python
 import pickle
 fname = kernel.pkl
-K = pickle.load(open(python,'rb'))
+K = pickle.load(open(fname,'rb'))
 ```
 
 K is then a dictionary with the following keys:
