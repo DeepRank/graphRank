@@ -59,6 +59,15 @@ class graphRank(object):
 		self.max_num_edges_train = 0
 		self.max_num_edges_test = 0
 
+		if not os.path.isfile(self.trainIDs):
+			raise FileNotFoundError('file %s not found' %(self.trainIDs))
+
+		if not os.path.isfile(self.testIDs):
+			raise FileNotFoundError('file %s not found' %(self.testIDs))
+
+		if not os.pathisdir(self.graph_path):
+			raise NotADirectoryError('Directory %s not found' %(self.graph_path))
+
 		self.train_graphs = {}
 		train_names = self._get_file_names(self.trainIDs)
 
@@ -540,31 +549,31 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description=' test graphRank')
 
 	# test and train IDS
-	parser.add_argument('--testID', type=str, default='testID.lst',help='list of ID for testing')
-	parser.add_argument('--trainID', type=str, default='trainID.lst',help='list of ID for training')
+	parser.add_argument('--testID', type=str, default='testID.lst',help='list of ID for testing. Default: testID.lst')
+	parser.add_argument('--trainID', type=str, default='trainID.lst',help='list of ID for training. Default: trainID.lst')
 
 	# graphs of the individual complex
-	parser.add_argument('--graph',type=str,default='graphMAT',help='folder containing the graph of each complex')
+	parser.add_argument('--graph',type=str,default='graphMAT',help='folder containing the graph of each complex. Default: graphMAT')
 
 	# file containing the kernel for checking
-	parser.add_argument('--check',type=str,default=None,help='file containing the kernel')
+	parser.add_argument('--check',type=str,default=None,help='file containing the kernel. Default: kernelMAT/<testID_name>.mat')
 
 	# where to write the output file
-	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the Kernel')
+	parser.add_argument('--outfile',type=str,default='kernel.pkl',help='Output file containing the calculated Kernel values. Default: kernel.pkl')
 
 	# what to do:  tune the kernel, test the calculation, run the entire calculations
 	parser.add_argument('--tune_kernel',action='store_true',help='Only tune the CUDA kernel')
 	parser.add_argument('--test',action='store_true',help='Only test the functions on a single pair pair of graph ')
 
 	# parameter of the calculations
-	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations')
-	parser.add_argument('--walk',type=int,default=4,help='Max walk length in the Kernel calculations')
+	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations. Default: 1')
+	parser.add_argument('--walk',type=int,default=4,help='Max walk length in the Kernel calculations. Default: 4')
 	
 
 	# cuda parameters
-	parser.add_argument('--func',type=str,default='all',help='Which functions to tune in the kernel (defaut all functions)')
+	parser.add_argument('--func',type=str,default='all',help='functions to tune in the kernel. Defaut: all functions')
 	parser.add_argument('--cuda',action='store_true', help='Use CUDA kernel')
-	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int,help='number of gpu block to use (default 8 8 1)')
+	parser.add_argument('--gpu_block',nargs='+',default=[8,8,1],type=int,help='number of gpu block to use. Default: 8 8 1')
 
 	args = parser.parse_args()
 
