@@ -19,8 +19,6 @@ except:
 class GraphMat(object):
 	def __init__(self,G,name='mol'):
 		
-		#self.nodes_pssm = { name : pssm for name,pssm in zip( G['Nodes'][()]['Name'][()],G['Nodes'][()]['pssm'][()])}
-		#self.edges = G['Edges'][()]['EndNodes'][()]
 		self.name = name
 		self.nodes_pssm_data = np.array([p.tolist() for p in G['Nodes'][()]['pssm'][()]])
 		self.nodes_info_data = G['Nodes'][()]['info'][()]
@@ -141,7 +139,8 @@ class graphRank(object):
 		K['gpu_block'] = gpu_block
 
 		# check file if it exists
-		Kcheck = spio.loadmat(check)['K']
+		if check is not None:
+			Kcheck = spio.loadmat(check)['K']
 
 		# go through all the data
 		for i1,(name1,G1) in enumerate(self.test_graphs.items()):
