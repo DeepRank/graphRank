@@ -272,7 +272,7 @@ class graphRank(object):
 
 		elif self.method == 'combvec':
 			weight = self._rbf_kernel_combvec(pssm1,pssm2)
-			ind     = self._get_index_combvec(index1,index2,g2.num_nodes)
+			ind    = self._get_index_combvec(index1,index2,g2.num_nodes)
 
 		elif self.method == 'vect':
 			weight = self._rbf_kernel_vectorized(pssm1,pssm2)

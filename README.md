@@ -6,9 +6,9 @@ cd python
 ```
 
 # Usage
-You can check all the options of the code using 
+You can check all the options of the code using
 
-``` 
+```
 python graphRank.py --help
 ```
 
@@ -35,6 +35,8 @@ optional arguments:
   --lamb LAMB           Lambda parameter in the Kernel calculations. Default:
                         1
   --walk WALK           Max walk length in the Kernel calculations. Default: 4
+  --method METHOD       Method used in the calculation: 'vect'(default),
+                        'combvec', 'iter'
   --func FUNC           functions to tune in the kernel. Defaut: all functions
   --cuda                Use CUDA kernel
   --gpu_block GPU_BLOCK [GPU_BLOCK ...]
@@ -42,7 +44,7 @@ optional arguments:
 
 ```
 
-# Test 
+# Test
 I've build the code as a command line tool. So before testing/using the code it must be made available in your path. You can for example create an alias in your .bashrc
 
 ```
