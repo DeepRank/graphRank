@@ -2,23 +2,23 @@
 
 import scipy.io as spio
 import scipy.sparse as sp_sparse
-import numpy as np 
+import numpy as np
 from time import time
-import itertools 
+import itertools
 from collections import OrderedDict
-import pickle 
+import pickle
 import os
 
 try:
 	from pycuda import driver, compiler, gpuarray, tools
-	import pycuda.autoinit 
+	import pycuda.autoinit
 except:
 	print('Warning : pycuda not found')
 
 
 class GraphMat(object):
 	def __init__(self,G,name='mol'):
-		
+
 		self.name = name
 		self.nodes_pssm_data = np.array([p.tolist() for p in G['Nodes'][()]['pssm'][()]])
 		self.nodes_info_data = G['Nodes'][()]['info'][()]
@@ -26,7 +26,7 @@ class GraphMat(object):
 
 		self.edges_index = np.array(G['Edges'][()]['idx'][()])-1
 		self.num_edges = np.int32(len(self.edges_index))
-		
+
 		self.edges_pssm = []
 		for ind in self.edges_index:
 			self.edges_pssm.append( self.nodes_pssm_data[ind[0]].tolist() + self.nodes_pssm_data[ind[1]].tolist()  )
@@ -34,13 +34,14 @@ class GraphMat(object):
 
 class graphRank(object):
 
-	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='graphMAT/',gpu_block=(8,8,1)):
+	def __init__(self,testIDs='testID.lst',trainIDs='trainID.lst',graph_path='graphMAT/',gpu_block=(8,8,1),method='vect'):
 
 		# all the options
 		self.trainIDs = trainIDs
 		self.testIDs = testIDs
-		self.graph_path = graph_path		
+		self.graph_path = graph_path
 		self.gpu_block = gpu_block
+		self.method = method
 
 		# the cuda kernel
 		self.kernel = os.path.dirname(os.path.abspath(__file__)) + '/cuda_kernel.c'
@@ -71,11 +72,11 @@ class graphRank(object):
 
 		self.test_graphs = {}
 		test_names  = self._get_file_names(self.testIDs)
-		
+
 		for name in train_names:
 			self.train_graphs[name] = self._import_single_graph_from_mat(self.graph_path + '/' + name)
 			self.max_num_edges_train = np.max([self.max_num_edges_train,self.train_graphs[name].num_edges])
-		
+
 		for name in test_names:
 			self.test_graphs[name] = self._import_single_graph_from_mat(self.graph_path + '/' + name)
 			self.max_num_edges_test = np.max([self.max_num_edges_test,self.test_graphs[name].num_edges])
@@ -91,7 +92,7 @@ class graphRank(object):
 			names = [name.split()[0] for name in f.readlines() if name.split()]
 		return names
 
-	# try to find the check file. 
+	# try to find the check file.
 	# return the filename is it's not None
 	# return ./kernelMAT/K_<test_name>.mat if this file exists
 	# return None otherwise
@@ -102,7 +103,7 @@ class graphRank(object):
 			test_name = os.path.splitext(self.testIDs)[0]
 			kname = 'kernelMAT/K_' + test_name + '.mat'
 			if os.path.isfile(kname):
-				return kname 
+				return kname
 			else:
 				return None
 
@@ -112,7 +113,7 @@ class graphRank(object):
 	# Main function to compute all the data
 	#
 	##############################################################
-	
+
 	def run(self,lamb,walk,outfile='kernel.pkl',cuda=False,gpu_block=(8,8,1),check=None):
 
 		# do all the single-time cuda operations
@@ -154,17 +155,17 @@ class graphRank(object):
 					self.compute_kron_mat_cuda(G1,G2)
 					self.compute_px_cuda(G1,G2)
 					self.compute_W0_cuda(G1,G2)
-			
+
 				else:
 					self.compute_kron_mat(G1,G2)
 					self.compute_px(G1,G2)
-					self.compute_W0(G1,G2)		
+					self.compute_W0(G1,G2)
 
 				# compute/print the kernel
 				K[(name1,name2)] = self.compute_K(lamb=lamb,walk=walk)
 				print('-'*20)
 				print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K[(name1,name2)]))))
-				
+
 				# print the check if present
 				if check is not None:
 					print('Kcheck :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),Kcheck[i1][i2]))))
@@ -204,14 +205,14 @@ class graphRank(object):
 			self.compute_kron_mat_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
 			self.compute_px_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
 			self.compute_W0_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
-	
+
 		else:
 			self.compute_kron_mat(self.test_graphs[test_name],self.train_graphs[train_name])
 			self.compute_px(self.test_graphs[test_name],self.train_graphs[train_name])
-			self.compute_W0(self.test_graphs[test_name],self.train_graphs[train_name])		
+			self.compute_W0(self.test_graphs[test_name],self.train_graphs[train_name])
 
 		K = GR.compute_K(lamb=lamb,walk=walk)
-		
+
 		print('')
 		print('-'*20)
 		print('- Accuracy')
@@ -227,7 +228,7 @@ class graphRank(object):
 	# Calculation of the K using CPU
 	#
 	##############################################################
-	
+
 	def compute_K(self,lamb=1,walk=4):
 
 		K = []
@@ -235,7 +236,7 @@ class graphRank(object):
 		self.px /= np.sum(self.px)
 		K.append(np.dot(self.px*self.W0,self.px))
 		pW = self.Wx.transpose().dot(self.px)
-		
+
 		for i in range(1,walk+1):
 			K.append(   K[i-1] + lamb**i * np.dot(pW,self.px) )
 			pW = self.Wx.transpose().dot(pW)
@@ -249,7 +250,7 @@ class graphRank(object):
 	##############################################################
 
 	# Kroenecker matrix calculation edges pssm similarity
-	def compute_kron_mat(self,g1,g2,method='vect'):
+	def compute_kron_mat(self,g1,g2):
 
 		t0 = time()
 		row,col,weight = [],[],[]
@@ -265,18 +266,20 @@ class graphRank(object):
 		pssm2 = g2.edges_pssm
 
 		# compute the weight
-		if method == 'iter':
+		if self.method == 'iter':
 			weight  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[pssm1,pssm2]) ])
 			ind     = np.array([ self._get_index(k[0],k[1],g2.num_nodes)  for k in itertools.product(*[index1,index2])])
 
-		elif method == 'combvec':
+		elif self.method == 'combvec':
 			weight = self._rbf_kernel_combvec(pssm1,pssm2)
 			ind     = self._get_index_combvec(index1,index2,g2.num_nodes)
 
-		elif method == 'vect':
+		elif self.method == 'vect':
 			weight = self._rbf_kernel_vectorized(pssm1,pssm2)
 			ind    = self._get_index_combvec(index1,index2,g2.num_nodes)
 
+		else:
+			raise ValueError('Method %s not recognized' %self.method)
 		index = ( ind[:,0].tolist(),ind[:,1].tolist() )
 
 		# final size
@@ -299,14 +302,17 @@ class graphRank(object):
 	def compute_W0(self,g1,g2,method='vect'):
 		t0 = time()
 
-		if method == 'iter':
+		if self.method == 'iter':
 			self.W0  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[g1.nodes_pssm_data,g2.nodes_pssm_data]) ])
 
-		elif method == 'combvec':
+		elif self.method == 'combvec':
 			self.W0  = self._rbf_kernel_combvec(g1.nodes_pssm_data,g2.nodes_pssm_data)
 
-		elif method == 'vect':
+		elif self.method == 'vect':
 			self.W0 = self._rbf_kernel_vectorized(g1.nodes_pssm_data,g2.nodes_pssm_data)
+
+		else:
+			raise ValueError('Method %s not recognized' %self.method)
 
 		print('CPU - W0   : %f' %(time()-t0))
 
@@ -616,7 +622,7 @@ if __name__ == "__main__":
 	# parameter of the calculations
 	parser.add_argument('--lamb',type=float,default=1,help='Lambda parameter in the Kernel calculations. Default: 1')
 	parser.add_argument('--walk',type=int,default=4,help='Max walk length in the Kernel calculations. Default: 4')
-	
+	parser.add_argument('--method',type=str,default='vect',help="Method used in the calculation: 'vect'(default), 'combvec', 'iter'")
 
 	# cuda parameters
 	parser.add_argument('--func',type=str,default='all',help='functions to tune in the kernel. Defaut: all functions')
@@ -627,7 +633,7 @@ if __name__ == "__main__":
 
 
 	# init and load the data
-	GR = graphRank(testIDs=args.testID,trainIDs=args.trainID,graph_path=args.graph,gpu_block=tuple(args.gpu_block))
+	GR = graphRank(testIDs=args.testID,trainIDs=args.trainID,graph_path=args.graph,gpu_block=tuple(args.gpu_block),method=args.method)
 	GR.import_from_mat()
 
 	# get the path of the check file
@@ -640,7 +646,7 @@ if __name__ == "__main__":
 	# only run a pair of graph with or w/o CUDA
 	elif args.test:
 		GR.test(lamb=args.lamb,walk=args.walk,cuda=args.cuda,gpu_block=args.gpu_block, check=checkfile)
-	
+
 	# run the entire calculation
 	else :
 		GR.run(lamb=args.lamb,walk=args.walk,outfile=args.outfile,cuda=args.cuda,gpu_block=tuple(args.gpu_block),check=checkfile)
