@@ -63,7 +63,7 @@ class graphRank(object):
 		if not os.path.isfile(self.testIDs):
 			raise FileNotFoundError('file %s not found' %(self.testIDs))
 
-		if not os.pathisdir(self.graph_path):
+		if not os.path.isdir(self.graph_path):
 			raise NotADirectoryError('Directory %s not found' %(self.graph_path))
 
 		self.train_graphs = {}
@@ -248,8 +248,9 @@ class graphRank(object):
 	#
 	##############################################################
 
-	# Kroenecker matrix calculation edges pssm similarity 
-	def compute_kron_mat(self,g1,g2):
+	# Kroenecker matrix calculation edges pssm similarity
+	def compute_kron_mat(self,g1,g2,method='vect'):
+
 		t0 = time()
 		row,col,weight = [],[],[]
 		n1,n2 = g1.num_edges,g2.num_edges
@@ -263,12 +264,22 @@ class graphRank(object):
 		pssm1 = np.vstack((g1.edges_pssm,np.hstack((g1.edges_pssm[:,20:],g1.edges_pssm[:,:20]))))
 		pssm2 = g2.edges_pssm
 
-		# compute the weight 
-		weight  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[pssm1,pssm2]) ])
-		ind     = np.array([ self._get_index(k[0],k[1],g2.num_nodes)  for k in itertools.product(*[index1,index2])])
+		# compute the weight
+		if method == 'iter':
+			weight  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[pssm1,pssm2]) ])
+			ind     = np.array([ self._get_index(k[0],k[1],g2.num_nodes)  for k in itertools.product(*[index1,index2])])
+
+		elif method == 'combvec':
+			weight = self._rbf_kernel_combvec(pssm1,pssm2)
+			ind     = self._get_index_combvec(index1,index2,g2.num_nodes)
+
+		elif method == 'vect':
+			weight = self._rbf_kernel_vectorized(pssm1,pssm2)
+			ind    = self._get_index_combvec(index1,index2,g2.num_nodes)
+
 		index = ( ind[:,0].tolist(),ind[:,1].tolist() )
-				
-		# final size	
+
+		# final size
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 
 		# create the Wx matrix
@@ -285,11 +296,20 @@ class graphRank(object):
 		print('CPU - Px   : %f' %(time()-t0))
 
 	# W0 alculation : nodes pssm similarity
-	def compute_W0(self,g1,g2):
+	def compute_W0(self,g1,g2,method='vect'):
 		t0 = time()
-		self.W0  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[g1.nodes_pssm_data,g2.nodes_pssm_data]) ])
+
+		if method == 'iter':
+			self.W0  = np.array([ self._rbf_kernel(p[0],p[1]) for p in itertools.product(*[g1.nodes_pssm_data,g2.nodes_pssm_data]) ])
+
+		elif method == 'combvec':
+			self.W0  = self._rbf_kernel_combvec(g1.nodes_pssm_data,g2.nodes_pssm_data)
+
+		elif method == 'vect':
+			self.W0 = self._rbf_kernel_vectorized(g1.nodes_pssm_data,g2.nodes_pssm_data)
+
 		print('CPU - W0   : %f' %(time()-t0))
-	
+
 	def _get_data(self,g1,g2,k):
 
 		index1 = k[0]
@@ -303,6 +323,16 @@ class graphRank(object):
 
 		return [w,ind[0],ind[1]]
 
+
+	@staticmethod
+	def _combvec(a1,a2,axis=0):
+		n1,m1 = a1.shape
+		n2,m2 = a2.shape
+		if axis == 0:
+			return np.vstack((np.repeat(a1,m2,axis=1),np.tile(a2,(1,m1))))
+		if axis == 1:
+			return np.hstack((np.repeat(a1,n2,axis=0),np.tile(a2,(n1,1))))
+
 	# Kernel for the edges pssm similarity calculation
 	@staticmethod
 	def _rbf_kernel(data1,data2,sigma=10):
@@ -310,10 +340,29 @@ class graphRank(object):
 		beta = 2*sigma**2
 		return np.exp(-delta/beta)
 
+	# kernel for edge similarity computed with the comnvec method
+	def _rbf_kernel_combvec(self,data1,data2,sigma=10):
+		k = data1.shape[1]
+		data = self._combvec(data1,data2,axis=1)
+		data = np.sum((data[:,:k]-data[:,k:])**2,1)
+		beta = 2*sigma**2
+		return np.exp(-data/beta)
+
+	# kernel for edge similarity computed with the cvectorized method
+	@staticmethod
+	def _rbf_kernel_vectorized(data1,data2,sigma=10):
+		delta = -2*np.dot(data1,data2.T) + np.sum(data1**2,axis=1)[:,None] + np.sum(data2**2,axis=1)
+		beta = 2*sigma**2
+		return np.exp(-delta/beta).reshape(-1)
+
 	@staticmethod
 	def _get_index(index1,index2,size2):
 		index = np.array(index1.tolist()) * size2 + np.array(index2.tolist())
 		return index.tolist()
+
+	def _get_index_combvec(self,index1,index2,size2):
+		index = self._combvec(index1,index2,axis=1)
+		return index[:,:2]*float(size2) + index[:,2:]
 
 
 	##############################################################
