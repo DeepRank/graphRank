@@ -10,11 +10,17 @@ import pickle
 import os
 
 try:
-	from pycuda import driver, compiler, gpuarray, tools
 	import pycuda.autoinit
+	from pycuda import driver, compiler, gpuarray, tools
+	from pycuda.cumath import exp as cuda_exp
 except:
 	print('Warning : pycuda not found')
 
+try:
+	import skcuda.linalg as culinalg
+	import skcuda.misc
+except:
+	print('Warning skcuda not found')
 
 class GraphMat(object):
 	def __init__(self,G,name='mol'):
@@ -83,6 +89,8 @@ class graphRank(object):
 
 	@staticmethod
 	def _import_single_graph_from_mat(fname):
+		if not os.path.isfile(fname):
+			raise FileNotFound(fname)
 		data = spio.loadmat(fname,squeeze_me=True)['G']
 		return GraphMat(data,fname.split('.')[0])
 
@@ -276,7 +284,7 @@ class graphRank(object):
 
 		elif self.method == 'vect':
 			weight = self._rbf_kernel_vectorized(pssm1,pssm2)
-			ind    = self._get_index_combvec(index1,index2,g2.num_nodes)
+			ind    = self._get_index_vect(index1,index2,g2.num_nodes)
 
 		else:
 			raise ValueError('Method %s not recognized' %self.method)
@@ -346,7 +354,7 @@ class graphRank(object):
 		beta = 2*sigma**2
 		return np.exp(-delta/beta)
 
-	# kernel for edge similarity computed with the comnvec method
+	# kernel for edge similarity computed with the combvec method
 	def _rbf_kernel_combvec(self,data1,data2,sigma=10):
 		k = data1.shape[1]
 		data = self._combvec(data1,data2,axis=1)
@@ -354,7 +362,7 @@ class graphRank(object):
 		beta = 2*sigma**2
 		return np.exp(-data/beta)
 
-	# kernel for edge similarity computed with the cvectorized method
+	# kernel for edge similarity computed with the vectorized method
 	@staticmethod
 	def _rbf_kernel_vectorized(data1,data2,sigma=10):
 		delta = -2*np.dot(data1,data2.T) + np.sum(data1**2,axis=1)[:,None] + np.sum(data2**2,axis=1)
@@ -369,6 +377,13 @@ class graphRank(object):
 	def _get_index_combvec(self,index1,index2,size2):
 		index = self._combvec(index1,index2,axis=1)
 		return index[:,:2]*float(size2) + index[:,2:]
+
+	@staticmethod
+	def _get_index_vect(index1,index2,size2):
+		index1 = index1*float(size2)
+		return np.hstack((
+		(index1[:,0][:,np.newaxis] + index2[:,0]).reshape(-1,1),
+		(index1[:,1][:,np.newaxis] + index2[:,1]).reshape(-1,1)))
 
 
 	##############################################################
@@ -387,26 +402,10 @@ class graphRank(object):
 	# kronecker matrix with the edges pssm
 	def compute_kron_mat_cuda(self,g1,g2,gpu_block=None):
 
-		t0 = time()
-		driver.Context.synchronize()
-		create_kron_mat_gpu = self.mod.get_function('create_kron_mat')
 
 		n1 = g1.num_edges
 		n2 = g2.num_edges
 		n_edges_prod = 2*n1*n2
-
-		pssm1 = gpuarray.to_gpu(np.array(g1.edges_pssm).astype(np.float32))
-		pssm2 = gpuarray.to_gpu(np.array(g2.edges_pssm).astype(np.float32))
-
-		ind1 = gpuarray.to_gpu(np.array(g1.edges_index).astype(np.int32))
-		ind2 = gpuarray.to_gpu(np.array(g2.edges_index).astype(np.int32))
-
-		# create the gpu arrays only if we have to
-		# i.e. in case we run the calculation once (test or tune)
-		# in other cases the weigh and index are booked in self.run()
-		if not hasattr(self,'weight_product'):
-			self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
-			self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
 
 		# get the gpu block size if specified
 		if gpu_block is not None:
@@ -416,22 +415,77 @@ class graphRank(object):
 		dim = (n1,n2,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
-		driver.Context.synchronize()
-		print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
-
 		# call the CUDA kernel
-		t0 =time()
-		create_kron_mat_gpu (ind1,ind2,
-							 pssm1,pssm2,
-			                 self.index_product,self.weight_product,
-			                 n1,n2,g2.num_nodes,
-							 block=block,grid=grid)
 
-		# extract the data
-		# restrict to the ones calculated here
-		ind = self.index_product.get()
-		ind = (ind[:n_edges_prod,0],ind[:n_edges_prod,1])
-		w = self.weight_product.get()[:n_edges_prod]
+		if self.method == 'combvec':
+
+			t0 = time()
+			driver.Context.synchronize()
+			create_kron_mat_gpu = self.mod.get_function('create_kron_mat')
+
+			# put the raw pssm on the GPU
+			pssm1 = gpuarray.to_gpu(np.array(g1.edges_pssm).astype(np.float32))
+			pssm2 = gpuarray.to_gpu(np.array(g2.edges_pssm).astype(np.float32))
+
+			# we have to put the index on the gpu as well
+			ind1 = gpuarray.to_gpu(np.array(g1.edges_index).astype(np.int32))
+			ind2 = gpuarray.to_gpu(np.array(g2.edges_index).astype(np.int32))
+
+			driver.Context.synchronize()
+			print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+
+			# create the gpu arrays only if we have to
+			# i.e. in case we run the calculation once (test or tune)
+			# in other cases the weigh and index are booked in self.run()
+			if not hasattr(self,'weight_product'):
+				self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
+				self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
+
+			# use the combvec kernel
+			t0 = time()
+			create_kron_mat_gpu (ind1,ind2,
+								 pssm1,pssm2,
+				                 self.index_product,self.weight_product,
+				                 n1,n2,g2.num_nodes,
+								 block=block,grid=grid)
+
+			# extract the data
+			# restrict to the ones calculated here
+			ind = self.index_product.get()
+			ind = (ind[:n_edges_prod,0],ind[:n_edges_prod,1])
+			w = self.weight_product.get()[:n_edges_prod]
+
+
+		elif self.method == 'vect':
+
+			t0 = time()
+			# double the edges index for g1
+			index1 = np.vstack((g1.edges_index,np.flip(g1.edges_index,axis=1)))
+			index2 = g2.edges_index
+
+			# double the pssm edges for g1
+			pssm1 = np.vstack((g1.edges_pssm,np.hstack((g1.edges_pssm[:,20:],g1.edges_pssm[:,:20]))))
+			pssm2 = g2.edges_pssm
+
+			# put that on GPU
+			gpu_pssm1 = gpuarray.to_gpu(np.array(pssm1).astype(np.float32))
+			gpu_pssm2 = gpuarray.to_gpu(np.array(pssm2).astype(np.float32))
+
+			driver.Context.synchronize()
+			print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+
+			t0 = time()
+			w = self._rbf_kernel_vectorized_cuda(gpu_pssm1,gpu_pssm2).get()
+			ind  = self._get_index_vect(index1,index2,g2.num_nodes) # still on CPU
+			ind = ( ind[:,0].tolist(),ind[:,1].tolist() )
+
+		elif self.method == 'iter':
+			raise ValueError('Method iter not implemented on GPU')
+
+
+		else:
+			raise ValueError('Method %s not recognized' %self.method)
+
 
 		# final size
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
@@ -493,6 +547,15 @@ class graphRank(object):
 		driver.Context.synchronize()
 		print('GPU - W0   : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
 
+	@staticmethod
+	def _rbf_kernel_vectorized_cuda(gpu_data1,gpu_data2,sigma=10):
+		gpu_out = 2*culinalg.dot(gpu_data1,culinalg.transpose(gpu_data2))
+		gpu_out = skcuda.misc.add(gpu_out,skcuda.misc.sum(culinalg.multiply(gpu_data1,gpu_data1),axis=1)[:,None])
+		gpu_out = skcuda.misc.add(gpu_out,skcuda.misc.sum(culinalg.multiply(gpu_data2,gpu_data2),axis=1))
+		beta = 2*sigma**2
+		gpu_out *= -1./beta
+		return cuda_exp(gpu_out).reshape(-1)
+
 
 	##############################################################
 	#
@@ -506,7 +569,7 @@ class graphRank(object):
 			from kernel_tuner import tune_kernel
 		except:
 			print('Install the Kernel Tuner : \n \t\t pip install kernel_tuner')
-			print('http://benvanwerkhoven.github.io/kernel_tuner/')		
+			print('http://benvanwerkhoven.github.io/kernel_tuner/')
 
 
 		test_name = list(self.test_graphs.keys())[0]
