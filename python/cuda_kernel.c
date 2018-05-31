@@ -41,7 +41,7 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 	float w;
 	int invert;
 
-	if ( (tx < n_edges_1) && (ty < n_edges_2) ){ 
+	if ( (tx < n_edges_1) && (ty < n_edges_2) ){
 
 		////////////////////////////////////
 		// first pass
@@ -53,7 +53,7 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 
 		// get its weight
 		invert=0;
-		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);		
+		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);
 
 		// store it
 		edges_weight_product[ind]       = w;
@@ -109,7 +109,7 @@ __global__ void create_p_vect(float *node_info1, float* node_info2, float *p, in
 	float cutoff = 0.5;
 
 	if ( (tx < n_nodes_1) && (ty < n_nodes_2) )
-	{ 
+	{
 		int ind = tx * n_nodes_2 + ty;
 		if ( (node_info1[tx] < cutoff) && (node_info2[ty] < cutoff))
 			p[ind] = 0;

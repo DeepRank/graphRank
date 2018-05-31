@@ -89,8 +89,8 @@ class graphRank(object):
 
 	@staticmethod
 	def _import_single_graph_from_mat(fname):
-		if not os.path.isfile(fname):
-			raise FileNotFound(fname)
+		if not os.path.isfile(fname+'.mat'):
+			raise FileNotFoundError(fname)
 		data = spio.loadmat(fname,squeeze_me=True)['G']
 		return GraphMat(data,fname.split('.')[0])
 
