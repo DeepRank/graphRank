@@ -70,7 +70,7 @@ __global__ void create_kron_mat( int *edges_index_1, int *edges_index_2,
 
 		// get the weight
 		invert=1;
-		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);	
+		w = rbf_kernel(tx,ty,edges_pssm_1,edges_pssm_2,len,invert);
 
 		// store it
 		edges_weight_product[ind]       = w;

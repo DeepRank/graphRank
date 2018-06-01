@@ -12,15 +12,10 @@ import os
 try:
 	import pycuda.autoinit
 	from pycuda import driver, compiler, gpuarray, tools
-	from pycuda.cumath import exp as cuda_exp
+	from pycuda.reduction import ReductionKernel
 except:
 	print('Warning : pycuda not found')
 
-try:
-	import skcuda.linalg as culinalg
-	import skcuda.misc
-except:
-	print('Warning skcuda not found')
 
 class GraphMat(object):
 	def __init__(self,G,name='mol'):
@@ -128,7 +123,7 @@ class graphRank(object):
 		if args.cuda:
 
 			# compile the kernel
-			GR.compile_kernel()
+			self.compile_kernel()
 
 			# prebook the weight and index matrix
 			# required for the calculation of self.Wx
@@ -158,6 +153,8 @@ class graphRank(object):
 				print('')
 				print(name1,name2)
 				print('-'*20)
+				t0 = time()
+
 				# compute the matrices
 				if args.cuda:
 					self.compute_kron_mat_cuda(G1,G2)
@@ -169,8 +166,10 @@ class graphRank(object):
 					self.compute_px(G1,G2)
 					self.compute_W0(G1,G2)
 
-				# compute/print the kernel
+				# compute the graphs
 				K[(name1,name2)] = self.compute_K(lamb=lamb,walk=walk)
+
+				print('Total      : %f' %(time()-t0))
 				print('-'*20)
 				print('K      :  ' + '  '.join(list(map(lambda x: '{:1.3}'.format(x),K[(name1,name2)]))))
 
@@ -208,6 +207,7 @@ class graphRank(object):
 		test_name = list(self.test_graphs.keys())[itest]
 		train_name = list(self.train_graphs.keys())[itrain]
 
+		t0 = time()
 		if cuda:
 			self.compile_kernel()
 			self.compute_kron_mat_cuda(self.test_graphs[test_name],self.train_graphs[train_name])
@@ -219,7 +219,9 @@ class graphRank(object):
 			self.compute_px(self.test_graphs[test_name],self.train_graphs[train_name])
 			self.compute_W0(self.test_graphs[test_name],self.train_graphs[train_name])
 
-		K = GR.compute_K(lamb=lamb,walk=walk)
+		K = self.compute_K(lamb=lamb,walk=walk)
+
+		print('Total      : %f' %(time()-t0))
 
 		print('')
 		print('-'*20)
@@ -239,15 +241,15 @@ class graphRank(object):
 
 	def compute_K(self,lamb=1,walk=4):
 
-		K = []
 		t0 = time()
 		self.px /= np.sum(self.px)
-		K.append(np.dot(self.px*self.W0,self.px))
-		pW = self.Wx.transpose().dot(self.px)
-
+		K = np.zeros(walk+1)
+		K[0] = np.sum(self.px**2*self.W0)
+		pW = self.Wx.dot(self.px)
 		for i in range(1,walk+1):
-			K.append(   K[i-1] + lamb**i * np.dot(pW,self.px) )
-			pW = self.Wx.transpose().dot(pW)
+			K[i] = K[i-1] + lamb**i * np.sum(pW*self.px)
+			pW = self.Wx.dot(pW)
+
 		print('CPU - K    : %f' %(time()-t0))
 		return K
 
@@ -288,14 +290,27 @@ class graphRank(object):
 
 		else:
 			raise ValueError('Method %s not recognized' %self.method)
-		index = ( ind[:,0].tolist(),ind[:,1].tolist() )
-
+		
 		# final size
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 
-		# create the Wx matrix
-		self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
-		self.Wx += self.Wx.transpose()
+		# instead of taking the transpose we duplicate 
+		# the weight and indexes (with switch)
+		_manual_transpose_ = True
+		if _manual_transpose_:
+
+			weight = np.concatenate((weight,weight))
+			ind = np.vstack((ind,np.flip(ind,axis=1)))
+			index = ( ind[:,0],ind[:,1] )
+			
+			# create the matrix
+			self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
+
+		if not _manual_transpose_:
+			index = ( ind[:,0],ind[:,1] )
+			self.Wx = sp_sparse.coo_matrix( (weight,index),shape=( n_nodes_prod,n_nodes_prod ) )
+			self.Wx += self.Wx.transpose()
+
 		print('CPU - Kron : %f' %(time()-t0))
 
 	# px vector calculation with nodes info
@@ -407,6 +422,7 @@ class graphRank(object):
 		n2 = g2.num_edges
 		n_edges_prod = 2*n1*n2
 
+
 		# get the gpu block size if specified
 		if gpu_block is not None:
 			block = gpu_block
@@ -415,88 +431,57 @@ class graphRank(object):
 		dim = (n1,n2,1)
 		grid = tuple([int(np.ceil(n/t)) for n,t in zip(dim,block)])
 
-		# call the CUDA kernel
+		t0 = time()
+		driver.Context.synchronize()
+		create_kron_mat_gpu = self.mod.get_function('create_kron_mat')
 
-		if self.method == 'combvec':
+		# put the raw pssm on the GPU
+		pssm1 = gpuarray.to_gpu(np.array(g1.edges_pssm).astype(np.float32))
+		pssm2 = gpuarray.to_gpu(np.array(g2.edges_pssm).astype(np.float32))
 
-			t0 = time()
-			driver.Context.synchronize()
-			create_kron_mat_gpu = self.mod.get_function('create_kron_mat')
+		# we have to put the index on the gpu as well
+		ind1 = gpuarray.to_gpu(np.array(g1.edges_index).astype(np.int32))
+		ind2 = gpuarray.to_gpu(np.array(g2.edges_index).astype(np.int32))
 
-			# put the raw pssm on the GPU
-			pssm1 = gpuarray.to_gpu(np.array(g1.edges_pssm).astype(np.float32))
-			pssm2 = gpuarray.to_gpu(np.array(g2.edges_pssm).astype(np.float32))
+		# create the gpu arrays only if we have to
+		# i.e. in case we run the calculation once (test or tune)
+		# in other cases the weigh and index are booked in self.run()
+		if not hasattr(self,'weight_product'):
+			self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
+			self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
 
-			# we have to put the index on the gpu as well
-			ind1 = gpuarray.to_gpu(np.array(g1.edges_index).astype(np.int32))
-			ind2 = gpuarray.to_gpu(np.array(g2.edges_index).astype(np.int32))
+		driver.Context.synchronize()
+		print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
 
-			driver.Context.synchronize()
-			print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
+		# use the combvec kernel
+		t0 = time()
+		create_kron_mat_gpu (ind1,ind2,
+							 pssm1,pssm2,
+			                 self.index_product,self.weight_product,
+			                 n1,n2,g2.num_nodes,
+							 block=block,grid=grid)
 
-			# create the gpu arrays only if we have to
-			# i.e. in case we run the calculation once (test or tune)
-			# in other cases the weigh and index are booked in self.run()
-			if not hasattr(self,'weight_product'):
-				self.weight_product = gpuarray.zeros(n_edges_prod, np.float32)
-				self.index_product = gpuarray.zeros((n_edges_prod,2), np.int32)
-
-			# use the combvec kernel
-			t0 = time()
-			create_kron_mat_gpu (ind1,ind2,
-								 pssm1,pssm2,
-				                 self.index_product,self.weight_product,
-				                 n1,n2,g2.num_nodes,
-								 block=block,grid=grid)
-
-			# extract the data
-			# restrict to the ones calculated here
-			ind = self.index_product.get()
-			ind = (ind[:n_edges_prod,0],ind[:n_edges_prod,1])
-			w = self.weight_product.get()[:n_edges_prod]
-
-
-		elif self.method == 'vect':
-
-			t0 = time()
-			# double the edges index for g1
-			index1 = np.vstack((g1.edges_index,np.flip(g1.edges_index,axis=1)))
-			index2 = g2.edges_index
-
-			# double the pssm edges for g1
-			pssm1 = np.vstack((g1.edges_pssm,np.hstack((g1.edges_pssm[:,20:],g1.edges_pssm[:,:20]))))
-			pssm2 = g2.edges_pssm
-
-			# put that on GPU
-			gpu_pssm1 = gpuarray.to_gpu(np.array(pssm1).astype(np.float32))
-			gpu_pssm2 = gpuarray.to_gpu(np.array(pssm2).astype(np.float32))
-
-			driver.Context.synchronize()
-			print('GPU - Mem  : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
-
-			t0 = time()
-			w = self._rbf_kernel_vectorized_cuda(gpu_pssm1,gpu_pssm2).get()
-			ind  = self._get_index_vect(index1,index2,g2.num_nodes) # still on CPU
-			ind = ( ind[:,0].tolist(),ind[:,1].tolist() )
-
-		elif self.method == 'iter':
-			raise ValueError('Method iter not implemented on GPU')
-
-
-		else:
-			raise ValueError('Method %s not recognized' %self.method)
-
+		# extract the data
+		# restrict to the ones calculated here
+		ind = self.index_product.get()
+		w = self.weight_product.get()[:n_edges_prod]
 
 		# final size
 		n_nodes_prod = g1.num_nodes*g2.num_nodes
 
 		# create the matrix
-		self.Wx = sp_sparse.coo_matrix( (w,ind),shape=( n_nodes_prod,n_nodes_prod ) )
-		self.Wx += self.Wx.transpose()
+		tt = time()
 
-		driver.Context.synchronize()
+		# replaced the transpose with
+		# doubling of weight and index (with switch)
+		w = np.concatenate((w,w))
+		ind = np.vstack((ind,np.flip(ind,axis=1)))
+		index = ( ind[:,0],ind[:,1])
+		self.Wx = sp_sparse.coo_matrix( (w,index),shape=( n_nodes_prod,n_nodes_prod ) )
+
+
+		#driver.Context.synchronize()
 		print('GPU - Kron : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
-
 
 	# Px vector with the node info
 	def compute_px_cuda(self,g1,g2,gpu_block=None):
@@ -547,15 +532,6 @@ class graphRank(object):
 		driver.Context.synchronize()
 		print('GPU - W0   : %f \t (block size:%dx%d)' %(time()-t0,block[0],block[1]))
 
-	@staticmethod
-	def _rbf_kernel_vectorized_cuda(gpu_data1,gpu_data2,sigma=10):
-		gpu_out = 2*culinalg.dot(gpu_data1,culinalg.transpose(gpu_data2))
-		gpu_out = skcuda.misc.add(gpu_out,skcuda.misc.sum(culinalg.multiply(gpu_data1,gpu_data1),axis=1)[:,None])
-		gpu_out = skcuda.misc.add(gpu_out,skcuda.misc.sum(culinalg.multiply(gpu_data2,gpu_data2),axis=1))
-		beta = 2*sigma**2
-		gpu_out *= -1./beta
-		return cuda_exp(gpu_out).reshape(-1)
-
 
 	##############################################################
 	#
@@ -575,7 +551,7 @@ class graphRank(object):
 		test_name = list(self.test_graphs.keys())[0]
 		train_name = list(self.train_graphs.keys())[0]
 
-		g1 = self.test_graphs[test_name],
+		g1 = self.test_graphs[test_name]
 		g2 = self.train_graphs[train_name]
 
 		tune_params = OrderedDict()
@@ -647,7 +623,6 @@ class graphRank(object):
 				result = tune_kernel(func,tunable_kernel,dim,args,tune_params)
 
 		except:
-
 			print('Function %s not found in %s' %(func,self.kernel))
 
 	# tranform the kernel to a tunable one
@@ -662,7 +637,7 @@ class graphRank(object):
 
 if __name__ == "__main__":
 
-	import argparse 
+	import argparse
 	parser = argparse.ArgumentParser(description=' test graphRank')
 
 	# test and train IDS
